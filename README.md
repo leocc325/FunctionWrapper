@@ -45,21 +45,21 @@ FunctionWrapper funcC(&Object::subtract,obj);
 ```
 
 ### 3.template<typename...Args> setArgs(Args&&...args)
-设置函数调用需要的参数,由于FunctionWrapper内部擦除了函数参数的类型信息(并非完全擦除,只是无法在这里获取,这也是FunctionWrapper的一个不完美的地方,但是确实想不到更好的解决办法了),所以为了确保后续对函数指针调用不发生异常,这里对传入参数的类型进行了非常严格的检查,不会对参数进行隐式转换,需要确保传入的每一个参数的类型和函数指针的参数完全一致,否则抛出异常。如果参数包为空,则setArgs函数内部什么都不会做。
+设置函数调用需要的参数,由于FunctionWrapper内部擦除了函数参数的类型信息(并非完全擦除,只是无法在这里获取,这也是FunctionWrapper的一个不完美的地方,但是确实想不到更好的解决办法了),所以为了确保后续对函数指针调用不发生异常,这里对传入参数的类型进行了非常严格的检查,不会对参数进行隐式转换,需要确保传入的每一个参数的类型和函数指针的参数完全一致,否则返回false。如果参数包为空,则setArgs函数内部什么都不会做。
 ```c++
 //以funcB为例,内部的函数指针需要的参数类型分别为int,double
 
 funcB.setArgs(5,10);
-//10会被推导为int类型,和第二个参数double类型不符合,抛出异常
+//10会被推导为int类型,和第二个参数double类型不符合,返回false
 
 funcB.setArgs(5,double(10));
-//两个参数类型都完全匹配,正确
+//两个参数类型都完全匹配,返回true
 ```
 
 #### 4.void exec()
 exec()为调用保存的函数指针的最终接口,这个函数内部会将保存的参数转发到保存的函数指针并完成函数指针的调用。
-如果FunctionWrapper内部没有包含函数指针,则什么都不会发生并且打印错误信息 ***函数指针信息 + :error:functor is empty,excute failed***
-如果FunctionWrapper内部设置函数参数,同样什么都不会发生并且打印错误信息 ***函数指针信息 + :error:no parameter has been setted,excute failed***
+如果FunctionWrapper内部没有包含函数指针,则什么都不会发生并且打印错误信息
+如果FunctionWrapper内部设置函数参数,同样什么都不会发生并且打印错误信息
 ```c++
 //对于以下代码,执行之后会产生输出
 FunctionWrapper funcA;
@@ -135,23 +135,23 @@ funcC.getResult(&ret3);
 //ret3 = 12.123
 ```
 
-### FunctionWrapper额外成员函数补充,这一部分功能需要将CONSOLECALL设置为1并且包含StringConvertorQ.hpp才可正常使用<br />
+### FunctionWrapper额外成员函数补充,这一部分功能需要包含StringConvertor.hpp才可正常使用<br />
 这些额外的函数支持将字符串参数转换为函数变量并完成对函数的调用,可以用于控制台、远程指令等功能。
 
-#### 9.void setStringArgs(const QStringList& args)
-将QStringList切割为若干个字符串,并且将字符串转换为对应的参数保存在FunctionWrapper内
+#### 9.void setStringArgs(const StringVector& args)  这里的StringVector定义在文件开头处
+将StringVector切割为若干个字符串,并且将字符串转换为对应的参数保存在FunctionWrapper内
 ```c++
-QStringList args = {"60","30"};
+StringVector args = {"60","30"};
 funcC.setStringArgs(args);
 
 funcC.exec();
 //打印信息为:double Object::subtract(double, int)60 30
 ```
 
-#### 10. void execString(const QStringList& strList)
+#### 10. void execString(const StringVector& strList)
 将字符串作为参数传入并且调用函数
 ```c++
-QStringList args = {"60","30"};
+StringVector args = {"60","30"};
 
 funcC.setStringArgs(args);
 funcC.exec();
@@ -161,7 +161,7 @@ funcC.exec();
 funcC.execString(args);
 ```
 
-#### 11.QString getResultString() const noexcept
+#### 11.String getResultString() const noexcept
 获取返回值并将返回值转换为字符串
 
 ## 二：一个完整的示例。
@@ -189,21 +189,25 @@ inline void funcwrapperTest()
     Object obj;
     FunctionWrapper funcC(&Object::subtract,&obj);
 
-    funcC.exec();//未设置参数,所以输出:error:no parameter has been setted,excute failed
-    try {
-        funcC.exec(10,10); //参数类型不匹配,抛出异常,这里参数被推导为int,int  但是函数所需参数为double,int
-    } catch (std::exception& e){
-        std::cout<<e.what()<<std::endl<<std::flush;    //输出:error:Argument type or number mismatch
-    }
-    funcC.exec(double(10),10);//显示指定参数类型并执行,输出:double Object::subtract(double, int)10 10
+    funcC.exec();//未设置参数,所以输出:error:no parameter has been setted,excute failed in function lambda FunctionWrapper(Func,Obj*)
+    funcC.exec(10,10); //参数类型不匹配,这里参数被推导为int,int 但是函数所需参数为double,int。输出:error:Argument type or number mismatch in function FunctionWrapper::setArgs(Args&&...args)
+    funcC.exec(double(30),10);//显示指定参数类型并执行,输出:double Object::subtract(double, int)30 10
 
-    double retsult = funcC.getResult<double>();//result = 10;
+    double retsult = funcC.getResult<double>();//result = 20;
 
     //再次尝试获取返回值,但是指定一个错误类型
-    try {
-        retsult = funcC.getResult<float>();
-    } catch (std::exception& e){
-        std::cout<<e.what()<<std::endl<<std::flush;    //输出:error:return value type mismatch
-    }
+    retsult = funcC.getResult<float>();//输出:error:return value type mismatch in function FunctionWrapper::getResult<RT>()
+
+    std::vector<std::string> vec{"10","20"};
+    funcB.execString(vec);//执行成功,输出double add(int, double)10 20
+
+    vec = {"30"};
+    funcB.execString(vec);//参数数量不足,输出error:argments number mismatch in function Manager::setStringArgs(void* from,void*& to)
+
+    vec = {"30","50"};
+    funcC.setStringArgs(vec);
+    funcC.exec();//正确执行,输出double Object::subtract(double, int)30 50
+
+    std::string strResult = funcC.getResultString();
 }
 ```

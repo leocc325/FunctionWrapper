@@ -1,60 +1,70 @@
 ﻿#ifndef FunctionWrapper_H
 #define FunctionWrapper_H
 
-#define CONSOLECALL 0
 
-#include "FunctionTraits.hpp"
-#if CONSOLECALL
+#ifdef QT_PROJECT
 #include "StringConvertorQ.hpp"
+#else
+#include "StringConvertor.hpp"
 #endif
+#include "FunctionTraits.hpp"
+#include <iostream>
 #include <stdexcept>
 #include <functional>
-#include <future>
-#include <QDebug>
+
 
 //使用消息id获取返回值类型
 template <std::size_t N>
 struct FunctionRT{using type = void;};
 
 template <>
-struct FunctionRT<std::numeric_limits<std::size_t>::max()>{using type = void;};
+struct FunctionRT<std::size_t(-1)>{using type = void;};
 
 //在excel中填写函数的返回值类型，然后用python脚本自动生成FunctionRT模板用来获取函数的返回值
 #define megRegister(msg, func) \
 template <> \
 struct FunctionRT<msg>{using type = func;};
 
-using namespace MetaUtility;
-
 class FunctionWrapper
 {
-#if CONSOLECALL
+    #ifdef QT_PROJECT
+        using String = QString;
+    #else
+        using String = std::string;
+    #endif
+
+    #ifdef QT_PROJECT
+        using StringVector = QVector<String>;
+    #else
+        using StringVector = std::vector<String>;
+
+    #endif
     template<int Index, typename Tuple>
     struct TupleHelper;
 
     template<typename Tuple>
     struct TupleHelper<-1, Tuple>
     {
-        static void set(Tuple& , const QStringList& ) {}
+        static void set(Tuple& , const StringVector& ) {}
     };
 
     template<int Index, typename Tuple>
     struct TupleHelper
     {
-        static void set(Tuple& tpl, const QStringList& strList)
+        static void set(Tuple& tpl, const StringVector& strVec)
         {
-            if  (Index < strList.size())
+            if  (Index < strVec.size())
             {
-                convertStringToArg(strList.at(Index),std::get<Index>(tpl));
-                TupleHelper<Index - 1, Tuple>::set(tpl, strList);
+                MetaUtility::convertStringToArg(strVec.at(Index),std::get<Index>(tpl));
+                TupleHelper<Index - 1, Tuple>::set(tpl, strVec);
             }
             else
             {
-                throw std::out_of_range("Index out of range for QStringList");
+                //在调用set之前已经检查了tpl和strVec的长度是否一致,理论上这里不会抛出异常
+                throw std::out_of_range("Index out of range for StringVector");
             }
         }
     };
-#endif
 
 #if 0
     //直接传递函数指针类型作为模板参数会导致模板膨胀
@@ -71,27 +81,27 @@ class FunctionWrapper
     struct Manager
     {
 #endif
-        static void setArgs(void* from,void*& to)
+        static bool setArgs(void* from,void*& to)
         {
             //需要在外面确保两个指针的类型一致,否则会UB
             if(from == nullptr)
-                return;
+                return false;
 
             initTuple(to);
             *static_cast<ArgsTuple*>(to) =  *static_cast<ArgsTuple*>(from);
+            return true;
         }
 
-        static void setStringArgs(const QStringList& argsList,void*& argsTuple)
+        static bool setStringArgs(const StringVector& strVec,void*& argsTuple)
         {
-#if CONSOLECALL
-            if(Arity != argsList.count()){
-                qCritical()<<QString("error:argments number mismatch,%1/%2").arg(Arity).arg(argsList.count());
-                return;
+            if(Arity != strVec.size()){
+                std::cerr<<"error:argments number mismatch in function Manager::setStringArgs(void* from,void*& to)"<<std::endl;
+                return false;
             }
 
             initTuple(argsTuple);
-            TupleHelper<Arity - 1, ArgsTuple>::set(*static_cast<ArgsTuple*>(argsTuple), argsList);
-#endif
+            TupleHelper<Arity - 1, ArgsTuple>::set(*static_cast<ArgsTuple*>(argsTuple), strVec);
+            return true;
         }
 
         static void deleteMembers(void* args,void* ret)
@@ -225,10 +235,10 @@ class FunctionWrapper
 
         void moveImpl(FunctionPrivate&&) noexcept;
 
-        std::function<void(FunctionWrapper*)> functor;
+        std::function<bool(FunctionWrapper*)> functor;
 
-        void (*argsHelper)(void*,void*&) = nullptr;
-        void (*stringArgsHelper)(const QStringList&,void*&) = nullptr;
+        bool (*argsHelper)(void*,void*&) = nullptr;
+        bool (*stringArgsHelper)(const StringVector&,void*&) = nullptr;
         void (*deleteHelper)(void*,void*) = nullptr;
         void (*resultHelper)(void*,void*&) = nullptr;
 
@@ -238,11 +248,10 @@ class FunctionWrapper
         const std::type_info* resultInfo = nullptr;
         const std::type_info* funcInfo = nullptr;
 
-        QString resultString;
+        String resultString;
     }* d = nullptr;
 
 public:
-    //***可以在构造函数中加入消息id参数，打印错误信息的时候就知道是那一条消息在报错
     FunctionWrapper();
 
     FunctionWrapper(const FunctionWrapper& other);
@@ -255,7 +264,7 @@ public:
     {
         d = new FunctionPrivate(func);
 
-        d->functor = [func,obj](FunctionWrapper* ptr)
+        d->functor = [func,obj](FunctionWrapper* ptr)->bool
         {
             //这里不能将this捕获到lambda中,当lambda捕获类的成员变量时,它实际上捕获的是this指针。
             //拷贝对象时,lambda中的this指针仍然指向原对象A导致新对象B执行函数时错误地访问 A 的数据。
@@ -264,11 +273,30 @@ public:
             //所以需要将其更改成调用时传入FunctionWrapper指针
             if(ptr->d->argsTuple == nullptr)
             {
-                qCritical()<<ptr->d->funcInfo->name()<<" error:no parameter has been setted,excute failed";
-                return;
+                std::cerr<<ptr->d->funcInfo->name()<<" error:no parameter has been setted,excute failed in function lambda FunctionWrapper(Func,Obj*)"<<std::endl;
+                return false;
             }
 
             ptr->callHelper(func,obj);
+            return true;
+        };
+    }
+
+    template<typename Func>
+    FunctionWrapper(Func func)
+    {
+        d = new FunctionPrivate(func);
+
+        d->functor = [func](FunctionWrapper* ptr)->bool
+        {
+            if(ptr->d->argsTuple == nullptr)
+            {
+                std::cerr<<ptr->d->funcInfo->name()<<" error:no parameter has been setted,excute failed in function lambda FunctionWrapper(Func)"<<std::endl;
+                return false;
+            }
+
+            ptr->callHelper(func);
+            return true;
         };
     }
 
@@ -282,77 +310,78 @@ public:
     }
 
     template<typename...Args>
-    void operator() (Args&&...args)
+    bool operator() (Args&&...args)
     {
-        exec(std::forward<Args>(args)...);
+        return exec(std::forward<Args>(args)...);
     }
 
-    void exec()
+    bool exec()
     {
         if(d->functor.operator bool())
         {
-            d->functor(this);
+            return d->functor(this);
         }
         else
         {
-            qCritical()<<d->funcInfo->name()<<" error:functor is empty,excute failed";
+            std::cerr<<d->funcInfo->name()<<" error:functor is empty,excute failed in function FunctionWrapper::exec()"<<std::endl;
+            return false;
         }
     }
 
     template<typename...Args>
-    void exec(Args&&...args)
+    bool exec(Args&&...args)
     {
-        setArgs(std::forward<Args>(args)...);
-        this->exec();
+        if(setArgs(std::forward<Args>(args)...))
+            return this->exec();
+        return false;
     }
 
     template<typename...Args>
-    typename std::enable_if<(sizeof...(Args)>0)>::type
+    typename std::enable_if<(sizeof...(Args)>0),bool>::type
     setArgs(Args&&...args)
     {
         using Tuple = typename std::tuple<typename std::remove_cv_t<typename std::remove_reference_t<Args>>...>;
         if(typeid (Tuple) != *d->argTupleInfo)
         {
-            QString errorInfo = QString(d->funcInfo->name()) + " error:Argument type or number mismatch";
-            throw std::invalid_argument(errorInfo.toStdString());
+            std::cerr<<d->funcInfo->name()<<" error:Argument type or number mismatch in function FunctionWrapper::setArgs(Args&&...args)"<<std::endl;
+            return false;
         }
         Tuple tpl = std::make_tuple(std::forward<Args>(args)...);
-        this->d->argsHelper(&tpl,d->argsTuple);
+        return this->d->argsHelper(&tpl,d->argsTuple);
     }
 
     //如果传入的参数列表为空就什么都不做
     template<typename...Args>
     typename std::enable_if<(sizeof...(Args)==0)>::type
-    setArgs(Args&&...){}
+    setArgs(Args&&...){return true;}
 
-#if CONSOLECALL
-    void setStringArgs(const QStringList& args)
+
+    bool setStringArgs(const StringVector& args)
     {
-        this->d->stringArgsHelper(args,d->argsTuple);
+        return this->d->stringArgsHelper(args,d->argsTuple);
     }
 
-    //这里不能使用重载来调用exec，因为exec在使用模板传参的时候可能会出现单个参数且参数类型是QStringList的时候，这种情况下会导致参数转发错误，所以需要给这两个函数改名
-    void execString(const QStringList& strList)
+    //这里不能使用重载来调用exec，因为exec在使用模板传参的时候可能会出现单个参数且参数类型是QtringList的时候，这种情况下会导致参数转发错误，所以需要给这两个函数改名
+    bool execString(const StringVector& strVec)
     {
-        setStringArgs(strList);
-        this->exec();
+        if(setStringArgs(strVec))
+            return this->exec();
+        return false;
     }
-#endif
 
     template<typename RT>
     typename std::enable_if<!std::is_void<RT>::value,RT>::type getResult()
     {
         if(typeid(RT) != *d->resultInfo)
         {
-            //如果类型不匹配说明代码参数错误,直接报异常
-            QString errorInfo = QString(d->funcInfo->name()) + " error:return value type mismatch";
-            throw std::invalid_argument(errorInfo.toStdString());
+            std::cerr<<d->funcInfo->name()<<" error:return value type mismatch in function FunctionWrapper::getResult<RT>()"<<std::endl;
+            return RT{};
         }
 
         if(d->result == nullptr)
         {
             //如果是业务流程导致没有计算结果则返回一个对应的零值,同时打印错误信息
-            qCritical()<<d->funcInfo->name()<<" error:incorrect return value due to nullptr result";
+            std::cerr<<d->funcInfo->name()<<" error:incorrect return value due to nullptr result in function FunctionWrapper::getResult<RT>()"<<std::endl;
             return RT{};
         }
         else
@@ -368,24 +397,22 @@ public:
     template<std::size_t Index,typename RT = typename FunctionRT<Index>::type>
     typename std::enable_if<std::is_void<RT>::value>::type getResult(){}
 
-    void getResult(void* ptr)
+    void getResult(void*& ptr)
     {
         if(d->result == nullptr)
         {
             //如果是业务流程导致没有计算结果则返回一个对应的零值,同时打印错误信息
-            qCritical()<<d->funcInfo->name()<<" error:incorrect return value due to nullptr result";
+            std::cerr<<d->funcInfo->name()<<" error:incorrect return value due to nullptr result in function FunctionWrapper::getResult(void*& ptr)"<<std::endl;
             return;
         }
         else
             d->resultHelper(d->result,ptr);
     }
 
-#if CONSOLECALL
-    QString getResultString() const noexcept
+    String getResultString() const noexcept
     {
         return d->resultString;
     }
-#endif
 
 private:
     ///调用成员函数
@@ -397,9 +424,9 @@ private:
     }
 
     ///调用非成员函数
-    template<typename Func,typename Obj>
+    template<typename Func>
     typename std::enable_if<!std::is_member_function_pointer<Func>::value>::type
-    callHelper(Func func,Obj*)
+    callHelper(Func func)
     {
         callImpl(func,std::make_index_sequence<FunctionTraits<Func>::Arity>{});
     }
@@ -422,9 +449,7 @@ private:
     {
         Tuple* tpl = static_cast<Tuple*>(d->argsTuple);
         Ret value = (func)(std::get<Index>(std::forward<Tuple>(*tpl))...);
-#if CONSOLECALL
-        d->resultString = convertArgToString(value);
-#endif
+        d->resultString = MetaUtility::convertArgToString(value);
         d->resultHelper(&value,d->result);
     }
 
@@ -446,9 +471,7 @@ private:
     {
         Tuple* tpl = static_cast<Tuple*>(d->argsTuple);
         Ret value = (obj->*func)(std::get<Index>(std::forward<Tuple>(*tpl))...);
-#if CONSOLECALL
-        d->resultString = convertArgToString(value);
-#endif
+        d->resultString = MetaUtility::convertArgToString(value);
         d->resultHelper(&value,d->result);
     }
 };
