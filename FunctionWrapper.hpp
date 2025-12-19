@@ -258,9 +258,9 @@ public:
 
     FunctionWrapper(FunctionWrapper&& other) noexcept;
 
-    template<typename Func,typename Obj = typename FunctionTraits<Func>::Class/*,
-             typename Enable = typename std::enable_if<std::is_same<Obj,typename FunctionTraits<Func>::Class>::value>::type*/>
-    FunctionWrapper(Func func,Obj* obj = nullptr)
+    template<typename Func,typename Obj = typename FunctionTraits<Func>::Class,
+             typename Enable = typename std::enable_if<std::is_same<Obj,typename FunctionTraits<Func>::Class>::value>::type>
+    FunctionWrapper(Func func,Obj* obj)
     {
         d = new FunctionPrivate(func);
 
