@@ -27,18 +27,21 @@ struct FunctionRT<msg>{using type = func;};
 
 class FunctionWrapper
 {
-    #ifdef QT_PROJECT
-        using String = QString;
-    #else
-        using String = std::string;
-    #endif
+#ifdef QT_PROJECT
+    using String = QString;
+#else
+    using String = std::string;
+#endif
 
-    #ifdef QT_PROJECT
-        using StringVector = QVector<String>;
-    #else
-        using StringVector = std::vector<String>;
+#ifdef QT_PROJECT
+    using StringVector = QVector<String>;
+#else
+    using StringVector = std::vector<String>;
+#endif
 
-    #endif
+    ///当传入指针为空指针时就用这个函数代替空指针进行初始化
+    void voidFunc(){};
+
     template<int Index, typename Tuple>
     struct TupleHelper;
 
@@ -75,9 +78,9 @@ class FunctionWrapper
     {
         using Ret = typename FunctionTraits<Func>::ReturnType;
         using ArgsTuple = typename FunctionTraits<Func>::BareTupleType;
-        static constexpr unsigned arity = FunctionTraits<Func>::Arity;
+        static constexpr int arity = FunctionTraits<Func>::Arity;
 #else
-    template<typename Ret,typename ArgsTuple,unsigned Arity = std::tuple_size<ArgsTuple>::value>
+    template<typename Ret,typename ArgsTuple,int Arity = std::tuple_size<ArgsTuple>::value>
     struct Manager
     {
 #endif
@@ -258,12 +261,11 @@ public:
 
     FunctionWrapper(FunctionWrapper&& other) noexcept;
 
-    template<typename Func,typename Obj = typename FunctionTraits<Func>::Class/*,
-             typename Enable = typename std::enable_if<std::is_same<Obj,typename FunctionTraits<Func>::Class>::value>::type*/>
-    FunctionWrapper(Func func,Obj* obj = nullptr)
+    ///当且仅当Func为成员函数指针且Obj为对应类对象时匹配这个构造函数,避免函数指针和类对象指针不匹配
+    template<typename Func,typename Obj>
+    FunctionWrapper(Func func,Obj* obj)
     {
         d = new FunctionPrivate(func);
-
         d->functor = [func,obj](FunctionWrapper* ptr)->bool
         {
             //这里不能将this捕获到lambda中,当lambda捕获类的成员变量时,它实际上捕获的是this指针。
@@ -282,11 +284,16 @@ public:
         };
     }
 
+    template<typename Obj>
+    FunctionWrapper(std::nullptr_t func,Obj* obj)
+    {
+        d = new FunctionPrivate(&FunctionWrapper::voidFunc);
+    }
+
     template<typename Func>
     FunctionWrapper(Func func)
     {
         d = new FunctionPrivate(func);
-
         d->functor = [func](FunctionWrapper* ptr)->bool
         {
             if(ptr->d->argsTuple == nullptr)
@@ -298,6 +305,11 @@ public:
             ptr->callHelper(func);
             return true;
         };
+    }
+
+    FunctionWrapper(std::nullptr_t func)
+    {
+        d = new FunctionPrivate(&FunctionWrapper::voidFunc);
     }
 
     FunctionWrapper& operator = (const FunctionWrapper&) ;
