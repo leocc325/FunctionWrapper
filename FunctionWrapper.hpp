@@ -3,11 +3,11 @@
 
 
 #ifdef QT_PROJECT
-#include "StringConvertorQ.hpp"
+#include "StringConvertor/StringConvertorQ.hpp"
 #else
-#include "StringConvertor.hpp"
+#include "StringConvertor/StringConvertor.hpp"
 #endif
-#include "FunctionTraits.hpp"
+#include "FunctionTraits/FunctionTraits.hpp"
 #include <iostream>
 #include <stdexcept>
 #include <functional>
